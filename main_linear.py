@@ -7,12 +7,14 @@ import math
 
 import torch
 import torch.backends.cudnn as cudnn
+import torch.nn.functional as F
 
 from main_ce import set_loader
 from util import AverageMeter
 from util import adjust_learning_rate, warmup_learning_rate, accuracy
 from util import set_optimizer
 from networks.resnet_big import SupConResNet, LinearClassifier
+
 
 try:
     import apex
@@ -50,7 +52,13 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+                        choices=['cifar10', 'cifar100', 'cmnist', 'celeba'], help='dataset')
+    parser.add_argument('--data_folder', type=str,
+                        default=None, help='path to custom dataset')
+    parser.add_argument('--mean', type=str,
+                        help='mean of dataset in path in form of str tuple')
+    parser.add_argument('--std', type=str,
+                        help='std of dataset in path in form of str tuple')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -64,7 +72,7 @@ def parse_option():
     opt = parser.parse_args()
 
     # set the path according to the environment
-    opt.data_folder = './datasets/'
+    # opt.data_folder = './datasets/'
 
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
@@ -90,10 +98,12 @@ def parse_option():
         else:
             opt.warmup_to = opt.learning_rate
 
-    if opt.dataset == 'cifar10':
+    if opt.dataset == 'cifar10' or 'cmnist':
         opt.n_cls = 10
     elif opt.dataset == 'cifar100':
         opt.n_cls = 100
+    elif opt.dataset == 'celeba':
+        opt.n_cls = 2
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
 
@@ -128,7 +138,7 @@ def set_model(opt):
     return model, classifier, criterion
 
 
-def train(train_loader, model, classifier, criterion, optimizer, epoch, opt):
+def train(train_loader, model, classifier, criterion, optimizer, epoch, opt, val_loader):
     """one epoch training"""
     model.eval()
     classifier.train()
@@ -157,7 +167,7 @@ def train(train_loader, model, classifier, criterion, optimizer, epoch, opt):
 
         # update metric
         losses.update(loss.item(), bsz)
-        acc1, acc5 = accuracy(output, labels, topk=(1, 5))
+        acc1, acc5 = accuracy(output, labels, topk=(1, 1))       
         top1.update(acc1[0], bsz)
 
         # SGD
@@ -179,6 +189,9 @@ def train(train_loader, model, classifier, criterion, optimizer, epoch, opt):
                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, top1=top1))
             sys.stdout.flush()
+        
+        if (idx + 1) % 500 == 0:
+            loss, val_acc = validate(val_loader, model, classifier, criterion, opt)
 
     return losses.avg, top1.avg
 
@@ -205,7 +218,7 @@ def validate(val_loader, model, classifier, criterion, opt):
 
             # update metric
             losses.update(loss.item(), bsz)
-            acc1, acc5 = accuracy(output, labels, topk=(1, 5))
+            acc1, acc5 = accuracy(output, labels, topk=(1, 1))
             top1.update(acc1[0], bsz)
 
             # measure elapsed time
@@ -244,7 +257,7 @@ def main():
         # train for one epoch
         time1 = time.time()
         loss, acc = train(train_loader, model, classifier, criterion,
-                          optimizer, epoch, opt)
+                          optimizer, epoch, opt, val_loader)
         time2 = time.time()
         print('Train epoch {}, total time {:.2f}, accuracy:{:.2f}'.format(
             epoch, time2 - time1, acc))

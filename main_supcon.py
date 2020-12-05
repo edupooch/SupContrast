@@ -16,6 +16,8 @@ from util import adjust_learning_rate, warmup_learning_rate
 from util import set_optimizer, save_model
 from networks.resnet_big import SupConResNet
 from losses import SupConLoss
+from loaders.cmnist import CMNIST
+from loaders.celeba import CelebA
 
 try:
     import apex
@@ -53,11 +55,15 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'path'], help='dataset')
-    parser.add_argument('--mean', type=str, help='mean of dataset in path in form of str tuple')
-    parser.add_argument('--std', type=str, help='std of dataset in path in form of str tuple')
-    parser.add_argument('--data_folder', type=str, default=None, help='path to custom dataset')
-    parser.add_argument('--size', type=int, default=32, help='parameter for RandomResizedCrop')
+                        choices=['cifar10', 'cifar100', 'path', 'cmnist', 'celeba'], help='dataset')
+    parser.add_argument('--mean', type=str,
+                        help='mean of dataset in path in form of str tuple')
+    parser.add_argument('--std', type=str,
+                        help='std of dataset in path in form of str tuple')
+    parser.add_argument('--data_folder', type=str,
+                        default=None, help='path to custom dataset')
+    parser.add_argument('--size', type=int, default=32,
+                        help='parameter for RandomResizedCrop')
 
     # method
     parser.add_argument('--method', type=str, default='SupCon',
@@ -113,7 +119,7 @@ def parse_option():
         if opt.cosine:
             eta_min = opt.learning_rate * (opt.lr_decay_rate ** 3)
             opt.warmup_to = eta_min + (opt.learning_rate - eta_min) * (
-                    1 + math.cos(math.pi * opt.warm_epochs / opt.epochs)) / 2
+                1 + math.cos(math.pi * opt.warm_epochs / opt.epochs)) / 2
         else:
             opt.warmup_to = opt.learning_rate
 
@@ -136,9 +142,9 @@ def set_loader(opt):
     elif opt.dataset == 'cifar100':
         mean = (0.5071, 0.4867, 0.4408)
         std = (0.2675, 0.2565, 0.2761)
-    elif opt.dataset == 'path':
+    elif opt.dataset == 'path' or opt.dataset == 'cmnist' or opt.dataset == 'celeba':
         mean = eval(opt.mean)
-        std = eval(opt.mean)
+        std = eval(opt.std)
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
     normalize = transforms.Normalize(mean=mean, std=std)
@@ -156,21 +162,41 @@ def set_loader(opt):
 
     if opt.dataset == 'cifar10':
         train_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                         transform=TwoCropTransform(train_transform),
+                                         transform=TwoCropTransform(
+                                             train_transform),
                                          download=True)
     elif opt.dataset == 'cifar100':
         train_dataset = datasets.CIFAR100(root=opt.data_folder,
-                                          transform=TwoCropTransform(train_transform),
+                                          transform=TwoCropTransform(
+                                              train_transform),
                                           download=True)
     elif opt.dataset == 'path':
         train_dataset = datasets.ImageFolder(root=opt.data_folder,
-                                            transform=TwoCropTransform(train_transform))
+                                             transform=TwoCropTransform(train_transform))
+    elif opt.dataset == 'cmnist':
+        train_dataset = CMNIST(
+            opt.data_folder,
+            train=True,
+            variance=0.02,
+            colorize='fg',
+            # class_subset=[4, 9],
+            same_distribution=True,
+            transform=TwoCropTransform(train_transform))
+    elif opt.dataset == 'celeba':
+        train_dataset = CelebA(
+            root=opt.data_folder,
+            split='train',
+            class_subset=['Arched_Eyebrows'],
+            download=False,
+            transform=TwoCropTransform(train_transform)
+        )
     else:
         raise ValueError(opt.dataset)
 
     train_sampler = None
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
+        train_dataset, batch_size=opt.batch_size, shuffle=(
+            train_sampler is None),
         num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)
 
     return train_loader
@@ -205,11 +231,14 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
     end = time.time()
     for idx, (images, labels) in enumerate(train_loader):
         data_time.update(time.time() - end)
-
         images = torch.cat([images[0], images[1]], dim=0)
         if torch.cuda.is_available():
             images = images.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
+        
+        # print('images shape', images.shape)
+        # print('labels shape', labels.shape)
+        # exit()
         bsz = labels.shape[0]
 
         # warm-up learning rate
@@ -245,8 +274,8 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
                   'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'loss {loss.val:.3f} ({loss.avg:.3f})'.format(
-                   epoch, idx + 1, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses))
+                      epoch, idx + 1, len(train_loader), batch_time=batch_time,
+                      data_time=data_time, loss=losses))
             sys.stdout.flush()
 
     return losses.avg
@@ -279,7 +308,8 @@ def main():
 
         # tensorboard logger
         logger.log_value('loss', loss, epoch)
-        logger.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
+        logger.log_value(
+            'learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         if epoch % opt.save_freq == 0:
             save_file = os.path.join(
@@ -290,6 +320,8 @@ def main():
     save_file = os.path.join(
         opt.save_folder, 'last.pth')
     save_model(model, optimizer, opt, opt.epochs, save_file)
+
+
 
 
 if __name__ == '__main__':

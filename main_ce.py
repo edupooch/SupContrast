@@ -15,6 +15,8 @@ from util import AverageMeter
 from util import adjust_learning_rate, warmup_learning_rate, accuracy
 from util import set_optimizer, save_model
 from networks.resnet_big import SupCEResNet
+from loaders.cmnist import CMNIST
+from loaders.celeba import CelebA
 
 try:
     import apex
@@ -52,7 +54,13 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+                        choices=['cifar10', 'cifar100','cmnist', 'celeba'], help='dataset')
+    parser.add_argument('--data_folder', type=str,
+                        default=None, help='path to custom dataset')
+    parser.add_argument('--mean', type=str,
+                        help='mean of dataset in path in form of str tuple')
+    parser.add_argument('--std', type=str,
+                        help='std of dataset in path in form of str tuple')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -67,7 +75,7 @@ def parse_option():
     opt = parser.parse_args()
 
     # set the path according to the environment
-    opt.data_folder = './datasets/'
+    # opt.data_folder = './datasets/'
     opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
     opt.tb_path = './save/SupCon/{}_tensorboard'.format(opt.dataset)
 
@@ -109,6 +117,10 @@ def parse_option():
         opt.n_cls = 10
     elif opt.dataset == 'cifar100':
         opt.n_cls = 100
+    elif opt.dataset == 'cmnist':
+        opt.n_cls = 10
+    elif opt.dataset == 'celeba':
+        opt.n_cls = 2
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
 
@@ -123,6 +135,9 @@ def set_loader(opt):
     elif opt.dataset == 'cifar100':
         mean = (0.5071, 0.4867, 0.4408)
         std = (0.2675, 0.2565, 0.2761)
+    elif opt.dataset == 'cmnist' or opt.dataset == 'celeba':
+        mean = eval(opt.mean) 
+        std = eval(opt.std)
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
     normalize = transforms.Normalize(mean=mean, std=std)
@@ -130,6 +145,10 @@ def set_loader(opt):
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
         transforms.RandomHorizontalFlip(),
+        transforms.RandomApply([
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+        ], p=0.8),
+        transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         normalize,
     ])
@@ -153,6 +172,34 @@ def set_loader(opt):
         val_dataset = datasets.CIFAR100(root=opt.data_folder,
                                         train=False,
                                         transform=val_transform)
+    elif opt.dataset == 'cmnist':
+        train_dataset = CMNIST(opt.data_folder,
+                                train=True,
+                                variance=0.02,
+                                colorize='fg',
+                                # class_subset=[4, 9],
+                                same_distribution=True,
+                                transform=train_transform)
+        
+        val_dataset = CMNIST(opt.data_folder,
+                                train=False,
+                                variance=0.02,
+                                colorize='fg',
+                                # class_subset=[4, 9],
+                                same_distribution=False,
+                                transform=val_transform) 
+    elif opt.dataset == 'celeba':
+        train_dataset = CelebA(root=opt.data_folder,
+                                split='train',
+                                class_subset=['Arched_Eyebrows'],
+                                download=False,
+                                transform=train_transform)
+        
+        val_dataset = CelebA(root=opt.data_folder,
+                                split='valid',
+                                class_subset=['Arched_Eyebrows'],
+                                download=False,
+                                transform=train_transform)
     else:
         raise ValueError(opt.dataset)
 
@@ -211,7 +258,7 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
 
         # update metric
         losses.update(loss.item(), bsz)
-        acc1, acc5 = accuracy(output, labels, topk=(1, 5))
+        acc1, acc5 = accuracy(output, labels, topk=(1,1))
         top1.update(acc1[0], bsz)
 
         # SGD
@@ -258,7 +305,7 @@ def validate(val_loader, model, criterion, opt):
 
             # update metric
             losses.update(loss.item(), bsz)
-            acc1, acc5 = accuracy(output, labels, topk=(1, 5))
+            acc1, acc5 = accuracy(output, labels, topk=(1, 1))
             top1.update(acc1[0], bsz)
 
             # measure elapsed time
