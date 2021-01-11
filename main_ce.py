@@ -84,7 +84,7 @@ def parse_option():
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
-    opt.model_name = 'SupCE_{}_{}_lr_{}_decay_{}_bsz_{}_trial_{}'.\
+    opt.model_name = 'SupCE_noaug_{}_{}_lr_{}_decay_{}_bsz_{}_trial_{}'.\
         format(opt.dataset, opt.model, opt.learning_rate, opt.weight_decay,
                opt.batch_size, opt.trial)
 
@@ -199,7 +199,7 @@ def set_loader(opt):
                                 split='valid',
                                 class_subset=['Arched_Eyebrows'],
                                 download=False,
-                                transform=train_transform)
+                                transform=val_transform)
     else:
         raise ValueError(opt.dataset)
 
@@ -291,6 +291,7 @@ def validate(val_loader, model, criterion, opt):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
+    correct_0, correct_1, total_0, total_1 = 0,0,0,0
 
     with torch.no_grad():
         end = time.time()
@@ -312,6 +313,16 @@ def validate(val_loader, model, criterion, opt):
             batch_time.update(time.time() - end)
             end = time.time()
 
+            #celeba
+            _, pred = output.topk(1, 1, True, True)
+            pred = pred.t()
+            target = labels.view(1, -1)
+            correct = pred.eq(target.expand_as(pred))
+            correct_0 += correct[target==0].sum()
+            correct_1 += correct[target==1].sum()
+            total_0 += (target==0).sum()
+            total_1 += (target==1).sum()
+
             if idx % opt.print_freq == 0:
                 print('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -321,6 +332,9 @@ def validate(val_loader, model, criterion, opt):
                        loss=losses, top1=top1))
 
     print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
+   
+    if opt.dataset == 'celeba':
+        print(f' * Correct class 0: {correct_0.float()/total_0.float():.4f} (total: {total_0})\n * Correct class 1: {correct_1.float()/total_1.float():.4f} (total: {total_1})')
     return losses.avg, top1.avg
 
 

@@ -14,7 +14,7 @@ from util import AverageMeter
 from util import adjust_learning_rate, warmup_learning_rate, accuracy
 from util import set_optimizer
 from networks.resnet_big import SupConResNet, LinearClassifier
-
+from sklearn.metrics import precision_recall_fscore_support
 
 try:
     import apex
@@ -207,6 +207,8 @@ def validate(val_loader, model, classifier, criterion, opt):
 
     with torch.no_grad():
         end = time.time()
+        correct_0, correct_1, total_0, total_1 = 0,0,0,0
+        
         for idx, (images, labels) in enumerate(val_loader):
             images = images.float().cuda()
             labels = labels.cuda()
@@ -219,6 +221,17 @@ def validate(val_loader, model, classifier, criterion, opt):
             # update metric
             losses.update(loss.item(), bsz)
             acc1, acc5 = accuracy(output, labels, topk=(1, 1))
+            
+            #celeba
+            _, pred = output.topk(1, 1, True, True)
+            pred = pred.t()
+            target = labels.view(1, -1)
+            correct = pred.eq(target.expand_as(pred))
+            correct_0 += correct[target==0].sum()
+            correct_1 += correct[target==1].sum()
+            total_0 += (target==0).sum()
+            total_1 += (target==1).sum()
+            
             top1.update(acc1[0], bsz)
 
             # measure elapsed time
@@ -234,6 +247,9 @@ def validate(val_loader, model, classifier, criterion, opt):
                        loss=losses, top1=top1))
 
     print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
+    if opt.dataset == 'celeba':
+        print(f' * Correct class 0: {correct_0.float()/total_0.float():.4f} (total: {total_0})\n * Correct class 1: {correct_1.float()/total_1.float():.4f} (total: {total_1})')
+    
     return losses.avg, top1.avg
 
 
